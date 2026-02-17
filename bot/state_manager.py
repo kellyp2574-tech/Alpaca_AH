@@ -266,22 +266,14 @@ def update_performance_after_session(session_date, session_trades):
     perf["best_streak"] = max(perf["best_streak"], perf["current_streak"])
     perf["worst_streak"] = min(perf["worst_streak"], perf["current_streak"])
 
-    # Averages
-    all_wins = perf["wins"]
-    all_losses = perf["losses"]
-    if win_pcts:
-        # Incremental average update
-        if all_wins > 0:
-            perf["avg_win_pct"] = perf["total_net_pnl_pct"]  # recalculate below
-    if all_wins > 0:
-        # Recompute from running sums
-        total_win_sum = perf.get("_win_sum", 0) + sum(win_pcts)
-        perf["_win_sum"] = total_win_sum
-        perf["avg_win_pct"] = round(total_win_sum / all_wins, 4)
-    if all_losses > 0:
-        total_loss_sum = perf.get("_loss_sum", 0) + sum(loss_pcts)
-        perf["_loss_sum"] = total_loss_sum
-        perf["avg_loss_pct"] = round(total_loss_sum / all_losses, 4)
+    # Averages — update running sums, then compute from those only
+    perf["_win_sum"] = perf.get("_win_sum", 0) + sum(win_pcts)
+    perf["_loss_sum"] = perf.get("_loss_sum", 0) + sum(loss_pcts)
+
+    if perf["wins"] > 0:
+        perf["avg_win_pct"] = round(perf["_win_sum"] / perf["wins"], 4)
+    if perf["losses"] > 0:
+        perf["avg_loss_pct"] = round(perf["_loss_sum"] / perf["losses"], 4)
 
     # Session log entry
     perf["session_log"].append({

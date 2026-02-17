@@ -154,6 +154,58 @@ def fetch_live_prices(tickers):
     return prices
 
 
+def fetch_snapshots(tickers):
+    """Get Alpaca snapshots for tickers — returns bid/ask spread and volume.
+
+    Returns dict of ticker -> {
+        "price": float,           # latest trade price
+        "spread_pct": float,      # (ask - bid) / midpoint, as fraction
+        "recent_volume": int,     # daily volume from snapshot
+        "bid": float,
+        "ask": float,
+    }
+    Tickers with missing/stale data get spread_pct=None, recent_volume=None.
+    """
+    results = {}
+    try:
+        client = get_data_client()
+        request = StockSnapshotRequest(symbol_or_symbols=tickers)
+        snapshots = client.get_stock_snapshot(request)
+
+        for ticker in tickers:
+            snap = snapshots.get(ticker)
+            if not snap:
+                continue
+
+            entry = {"price": None, "spread_pct": None, "recent_volume": None,
+                     "bid": None, "ask": None}
+
+            # Latest trade price
+            if snap.latest_trade:
+                entry["price"] = float(snap.latest_trade.price)
+
+            # Bid/ask spread
+            if snap.latest_quote:
+                bid = float(snap.latest_quote.bid_price) if snap.latest_quote.bid_price else 0
+                ask = float(snap.latest_quote.ask_price) if snap.latest_quote.ask_price else 0
+                entry["bid"] = bid
+                entry["ask"] = ask
+                if bid > 0 and ask > 0:
+                    midpoint = (bid + ask) / 2
+                    entry["spread_pct"] = (ask - bid) / midpoint if midpoint > 0 else None
+
+            # Volume from daily bar
+            if snap.daily_bar:
+                entry["recent_volume"] = int(snap.daily_bar.volume)
+
+            results[ticker] = entry
+
+    except Exception as e:
+        logger.warning(f"Alpaca snapshot fetch failed: {e}")
+
+    return results
+
+
 def get_current_prices(tickers):
     """Get the most recent close price for each ticker."""
     bars = fetch_daily_bars(tickers, lookback_days=5)

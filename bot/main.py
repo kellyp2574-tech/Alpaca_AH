@@ -262,9 +262,10 @@ def phase_entry(state, dry_run=False):
         logger.info("No extreme move candidates — nothing to enter")
         return
 
-    # Fresh prices for entry
+    # Fresh prices + spread data for entry
     candidate_symbols = list(candidates.keys())
-    prices = data.fetch_live_prices(candidate_symbols)
+    snapshots = data.fetch_snapshots(candidate_symbols)
+    prices = {sym: snap.get("price") for sym, snap in snapshots.items() if snap.get("price")}
 
     try:
         equity = broker.get_equity()
@@ -324,12 +325,13 @@ def phase_entry(state, dry_run=False):
                 order = broker.sell_short_limit_extended(symbol, qty, price)
 
             if order:
+                entry_snap = snapshots.get(symbol, {})
                 positions[symbol] = {
                     "direction": direction,
                     "entry_price": price,
                     "qty": qty,
                     "entry_time": now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "entry_spread_pct": 0,  # TODO: fetch bid-ask if available
+                    "entry_spread_pct": entry_snap.get("spread_pct") or 0,
                     "anchor_close": anchor,
                     "max_favorable_pnl": 0.0,
                     "max_adverse_pnl": 0.0,
@@ -369,17 +371,22 @@ def run_manage_cycle(state, dry_run=False):
         return
 
     symbols = list(positions.keys())
-    prices = data.fetch_live_prices(symbols)
+
+    # Use snapshots for real spread/volume data (bid/ask + daily volume)
+    snapshots = data.fetch_snapshots(symbols)
 
     for symbol in list(positions.keys()):
         pos = positions[symbol]
-        price = prices.get(symbol)
+        snap = snapshots.get(symbol, {})
+        price = snap.get("price")
         if not price:
             logger.debug(f"No price for {symbol} — skipping manage")
             continue
 
         entry_price = pos["entry_price"]
         direction = pos["direction"]
+        spread_pct = snap.get("spread_pct")
+        recent_volume = snap.get("recent_volume")
 
         # Update excursion tracking
         if direction == "long":
@@ -391,8 +398,8 @@ def run_manage_cycle(state, dry_run=False):
         # Check stop + profit ceiling
         should_exit, pnl, reason = strategies.evaluate_overnight_management(
             entry_price, price, direction,
-            spread_pct=None,      # TODO: fetch live spread
-            recent_volume=None,   # TODO: fetch recent volume
+            spread_pct=spread_pct,
+            recent_volume=recent_volume,
         )
 
         if should_exit:

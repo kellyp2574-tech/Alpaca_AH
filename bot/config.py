@@ -46,14 +46,10 @@ MONITOR_INTERVAL_SEC = 60     # check every 60s during 4:05–6:00 PM
 OVERNIGHT_INTERVAL_SEC = 300  # check every 5 min overnight (manage only)
 
 # ═══════════════════════════════════════════════════
-# Universe — Full Nasdaq-100 + Top 150 S&P 500
-# ~200 unique symbols, deduplicated
+# Universe — Nasdaq-100 only (v1)
+# ~100 symbols — keeps rate limits comfortable
 # ═══════════════════════════════════════════════════
 WATCHLIST = [
-    # ══════════════════════════════════════════════
-    # NASDAQ-100  (full index)
-    # ══════════════════════════════════════════════
-
     # ── Mega-caps ──
     "AAPL",   # Apple
     "MSFT",   # Microsoft
@@ -124,7 +120,7 @@ WATCHLIST = [
     "CHTR",   # Charter Communications
     "TMUS",   # T-Mobile
 
-    # ── Biotech / Healthcare (NDX) ──
+    # ── Biotech / Healthcare ──
     "AMGN",   # Amgen
     "GILD",   # Gilead Sciences
     "ISRG",   # Intuitive Surgical
@@ -138,7 +134,7 @@ WATCHLIST = [
     "ILMN",   # Illumina
     "AZN",    # AstraZeneca (ADR)
 
-    # ── Consumer (NDX) ──
+    # ── Consumer ──
     "PEP",    # PepsiCo
     "SBUX",   # Starbucks
     "MDLZ",   # Mondelez
@@ -151,7 +147,7 @@ WATCHLIST = [
     "ROST",   # Ross Stores
     "DLTR",   # Dollar Tree
 
-    # ── Industrials / Utilities (NDX) ──
+    # ── Industrials / Utilities ──
     "HON",    # Honeywell
     "ADP",    # ADP
     "CTAS",   # Cintas
@@ -176,120 +172,6 @@ WATCHLIST = [
     "LCID",   # Lucid Motors
     "ENPH",   # Enphase Energy
     "CCEP",   # Coca-Cola Europacific
-
-    # ══════════════════════════════════════════════
-    # S&P 500 TOP 150 (not already in NDX above)
-    # ══════════════════════════════════════════════
-
-    # ── Financials ──
-    "JPM",    # JPMorgan Chase
-    "V",      # Visa
-    "MA",     # Mastercard
-    "BAC",    # Bank of America
-    "GS",     # Goldman Sachs
-    "MS",     # Morgan Stanley
-    "SCHW",   # Charles Schwab
-    "BLK",    # BlackRock
-    "SPGI",   # S&P Global
-    "AXP",    # American Express
-    "CB",     # Chubb
-    "MMC",    # Marsh McLennan
-    "ICE",    # Intercontinental Exchange
-    "CME",    # CME Group
-    "PNC",    # PNC Financial
-    "USB",    # U.S. Bancorp
-    "COF",    # Capital One
-    "BK",     # Bank of New York Mellon
-    "AON",    # Aon
-    "AFL",    # Aflac
-    "MET",    # MetLife
-    "TRV",    # Travelers
-    "ALL",    # Allstate
-    "PRU",    # Prudential
-    "AIG",    # AIG
-    "FI",     # Fiserv
-
-    # ── Healthcare / Pharma (SPX) ──
-    "UNH",    # UnitedHealth
-    "JNJ",    # Johnson & Johnson
-    "LLY",    # Eli Lilly
-    "MRK",    # Merck
-    "ABBV",   # AbbVie
-    "PFE",    # Pfizer
-    "TMO",    # Thermo Fisher
-    "ABT",    # Abbott Labs
-    "DHR",    # Danaher
-    "BMY",    # Bristol-Myers Squibb
-    "SYK",    # Stryker
-    "ZTS",    # Zoetis
-    "CI",     # Cigna
-    "ELV",    # Elevance Health
-    "MCK",    # McKesson
-    "BSX",    # Boston Scientific
-    "MDT",    # Medtronic
-    "HCA",    # HCA Healthcare
-
-    # ── Consumer / Retail (SPX) ──
-    "WMT",    # Walmart
-    "HD",     # Home Depot
-    "PG",     # Procter & Gamble
-    "KO",     # Coca-Cola
-    "MCD",    # McDonald's
-    "NKE",    # Nike
-    "LOW",    # Lowe's
-    "TJX",    # TJX Companies
-    "CMG",    # Chipotle
-    "CL",     # Colgate-Palmolive
-    "PM",     # Philip Morris
-    "ORCL",   # Oracle
-    "CRM",    # Salesforce
-    "NOW",    # ServiceNow
-    "ACN",    # Accenture
-    "ANET",   # Arista Networks
-
-    # ── Industrials (SPX) ──
-    "GE",     # GE Aerospace
-    "CAT",    # Caterpillar
-    "RTX",    # RTX (Raytheon)
-    "UPS",    # UPS
-    "DE",     # Deere & Company
-    "ETN",    # Eaton
-    "EMR",    # Emerson Electric
-    "ITW",    # Illinois Tool Works
-    "WM",     # Waste Management
-    "PH",     # Parker Hannifin
-    "NOC",    # Northrop Grumman
-    "GD",     # General Dynamics
-    "LMT",    # Lockheed Martin
-    "TT",     # Trane Technologies
-    "CARR",   # Carrier Global
-    "ROP",    # Roper Technologies
-    "TDG",    # TransDigm
-    "MSI",    # Motorola Solutions
-    "HLT",    # Hilton
-
-    # ── Energy (SPX) ──
-    "XOM",    # ExxonMobil
-    "CVX",    # Chevron
-    "COP",    # ConocoPhillips
-    "SLB",    # Schlumberger
-    "EOG",    # EOG Resources
-
-    # ── Utilities / REITs (SPX) ──
-    "NEE",    # NextEra Energy
-    "SO",     # Southern Company
-    "DUK",    # Duke Energy
-    "PLD",    # Prologis
-    "PSA",    # Public Storage
-    "WELL",   # Welltower
-    "AMT",    # American Tower
-
-    # ── Materials / Chemicals (SPX) ──
-    "APD",    # Air Products
-    "ECL",    # Ecolab
-    "SHW",    # Sherwin-Williams
-    "FCX",    # Freeport-McMoRan
-    "NEM",    # Newmont
 ]
 
 # ═══════════════════════════════════════════════════
