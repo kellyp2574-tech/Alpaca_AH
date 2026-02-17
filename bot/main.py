@@ -20,7 +20,7 @@ import sys
 import time
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from bot import config
 from bot.state_manager import (
@@ -71,11 +71,18 @@ def is_past_entry_cutoff():
     return time_reached(config.ENTRY_CUTOFF_HOUR, config.ENTRY_CUTOFF_MINUTE)
 
 
+def is_weekday():
+    """True if today is a weekday (Mon=0 .. Fri=4)."""
+    return now().weekday() < 5
+
+
 def is_exit_time():
-    """True if we're in the 9:30–9:40 AM exit window (next morning)."""
+    """True if we're in the 9:30–9:40 AM exit window on a weekday morning."""
     n = now()
     if n.hour >= config.BOT_START_HOUR:
         return False  # still in PM session
+    if not is_weekday():
+        return False  # weekend — not exit time
     exit_start = n.replace(hour=config.EXIT_HOUR, minute=config.EXIT_MINUTE, second=0)
     exit_end = n.replace(
         hour=config.EXIT_HOUR,
@@ -86,10 +93,12 @@ def is_exit_time():
 
 
 def is_session_over():
-    """True if past the exit window end (9:40 AM)."""
+    """True if past the exit window end (9:40 AM) on a weekday."""
     n = now()
     if n.hour >= config.BOT_START_HOUR:
         return False
+    if not is_weekday():
+        return False  # weekend — session not over yet
     end_minute = config.EXIT_MINUTE + config.EXIT_WINDOW_MINUTES
     end_hour = config.EXIT_HOUR + (end_minute // 60)
     end_minute = end_minute % 60
@@ -101,12 +110,38 @@ def is_friday():
     return now().weekday() == 4
 
 
+def _next_weekday_target(hour, minute):
+    """Get a datetime for the next occurrence of hour:minute on a weekday.
+    If today is a weekday and that time hasn't passed, returns today.
+    Otherwise advances to next weekday (skips Sat/Sun)."""
+    target = now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # If already past that time today, move to tomorrow
+    if target <= now():
+        target += timedelta(days=1)
+    # Skip weekend
+    while target.weekday() >= 5:  # 5=Sat, 6=Sun
+        target += timedelta(days=1)
+    return target
+
+
 def sleep_until(hour, minute):
     """Sleep until the specified time today. Returns immediately if already past."""
     target = now().replace(hour=hour, minute=minute, second=0, microsecond=0)
     delta = (target - now()).total_seconds()
     if delta > 0:
         logger.info(f"Waiting until {hour}:{minute:02d} ({delta:.0f}s)...")
+        time.sleep(delta)
+
+
+def sleep_until_next_weekday(hour, minute):
+    """Sleep until hour:minute on the next weekday.
+    On Friday night this will sleep through the entire weekend until Monday."""
+    target = _next_weekday_target(hour, minute)
+    delta = (target - now()).total_seconds()
+    if delta > 0:
+        hours_away = delta / 3600
+        logger.info(f"Waiting until {target.strftime('%A %I:%M %p')} "
+                    f"({hours_away:.1f} hours / {delta:.0f}s)...")
         time.sleep(delta)
 
 
@@ -390,15 +425,32 @@ def run_manage_cycle(state, dry_run=False):
 
 
 def phase_manage(state, dry_run=False):
-    """Overnight management loop: 6:00 PM to 9:30 AM."""
+    """Overnight management loop: 6:00 PM to 9:30 AM.
+    On Friday sessions, sleeps through the weekend until Monday morning."""
     logger.info("═" * 60)
     logger.info("PHASE 4: MANAGE — overnight hold" + (" [DRY RUN]" if dry_run else ""))
+
+    positions = state.get("positions", {})
+
+    # If it's a weekend (Friday entries), skip straight to Monday morning
+    if not is_weekday() or (is_friday() and time_reached(20, 0)):
+        if positions:
+            logger.info(f"Weekend detected — holding {len(positions)} positions until Monday")
+            logger.info("Sleeping through weekend...")
+        sleep_until_next_weekday(config.EXIT_HOUR, config.EXIT_MINUTE - 5)
+        return
 
     loop_count = 0
     while not is_session_over():
         # Check for exit window
         if is_exit_time():
             break
+
+        # If we crossed into the weekend (shouldn't happen Mon-Thu, but safety)
+        if not is_weekday():
+            logger.info("Weekend reached — sleeping until Monday")
+            sleep_until_next_weekday(config.EXIT_HOUR, config.EXIT_MINUTE - 5)
+            return
 
         positions = state.get("positions", {})
         if not positions:
@@ -407,7 +459,7 @@ def phase_manage(state, dry_run=False):
             continue
 
         loop_count += 1
-        logger.info(f"── Manage loop {loop_count} @ {now().strftime('%I:%M:%S %p')} "
+        logger.info(f"── Manage loop {loop_count} @ {now().strftime('%I:%M:%S %p %A')} "
                      f"({len(positions)} positions) ──")
 
         try:
@@ -433,9 +485,9 @@ def phase_exit(state, dry_run=False):
         logger.info("No positions to close")
         return
 
-    # Wait for market open
-    logger.info("Waiting for 9:30 AM market open...")
-    sleep_until(config.EXIT_HOUR, config.EXIT_MINUTE)
+    # Wait for market open (skips weekend if Friday session)
+    logger.info("Waiting for next market open (9:30 AM weekday)...")
+    sleep_until_next_weekday(config.EXIT_HOUR, config.EXIT_MINUTE)
 
     # Small delay to let opening prints settle
     time.sleep(5)
