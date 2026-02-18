@@ -123,6 +123,14 @@ DEFAULT_PERFORMANCE = {
     "short_trades": 0,
     "short_wins": 0,
 
+    # By trigger window (4-6 vs 6-8)
+    "window_4_6_trades": 0,
+    "window_4_6_wins": 0,
+    "window_4_6_pnl_pct": 0.0,
+    "window_6_8_trades": 0,
+    "window_6_8_wins": 0,
+    "window_6_8_pnl_pct": 0.0,
+
     # P&L (net of friction)
     "total_net_pnl_pct": 0.0,      # sum of all net_pnl_pct
     "total_net_pnl_dollars": 0.0,   # sum of all dollar P&L
@@ -245,6 +253,19 @@ def update_performance_after_session(session_date, session_trades):
             if net_pnl > 0.0001:
                 perf["short_wins"] += 1
 
+        # By trigger window
+        tw = trade.get("trigger_window", "unknown")
+        if tw == "4-6":
+            perf["window_4_6_trades"] += 1
+            perf["window_4_6_pnl_pct"] += net_pnl
+            if net_pnl > 0.0001:
+                perf["window_4_6_wins"] += 1
+        elif tw == "6-8":
+            perf["window_6_8_trades"] += 1
+            perf["window_6_8_pnl_pct"] += net_pnl
+            if net_pnl > 0.0001:
+                perf["window_6_8_wins"] += 1
+
         # Best / worst
         symbol = trade.get("symbol", "?")
         if net_pnl > perf["best_trade_pnl_pct"]:
@@ -291,6 +312,8 @@ def update_performance_after_session(session_date, session_trades):
     perf["total_net_pnl_dollars"] = round(perf["total_net_pnl_dollars"], 2)
     perf["avg_mfe_pct"] = round(perf["avg_mfe_pct"], 4)
     perf["avg_mae_pct"] = round(perf["avg_mae_pct"], 4)
+    perf["window_4_6_pnl_pct"] = round(perf["window_4_6_pnl_pct"], 4)
+    perf["window_6_8_pnl_pct"] = round(perf["window_6_8_pnl_pct"], 4)
 
     save_performance(perf)
     return perf
@@ -308,6 +331,19 @@ def print_performance_summary(perf=None):
     long_wr = (perf["long_wins"] / perf["long_trades"] * 100) if perf["long_trades"] > 0 else 0
     short_wr = (perf["short_wins"] / perf["short_trades"] * 100) if perf["short_trades"] > 0 else 0
 
+    # Window stats
+    w46_t = perf.get("window_4_6_trades", 0)
+    w46_w = perf.get("window_4_6_wins", 0)
+    w46_pnl = perf.get("window_4_6_pnl_pct", 0)
+    w46_wr = (w46_w / w46_t * 100) if w46_t > 0 else 0
+    w46_avg = (w46_pnl / w46_t) if w46_t > 0 else 0
+
+    w68_t = perf.get("window_6_8_trades", 0)
+    w68_w = perf.get("window_6_8_wins", 0)
+    w68_pnl = perf.get("window_6_8_pnl_pct", 0)
+    w68_wr = (w68_w / w68_t * 100) if w68_t > 0 else 0
+    w68_avg = (w68_pnl / w68_t) if w68_t > 0 else 0
+
     lines = [
         "",
         "═" * 60,
@@ -320,6 +356,12 @@ def print_performance_summary(perf=None):
         f"  Win rate:     {win_rate:.1f}%",
         f"  Long:         {perf['long_trades']} trades, {long_wr:.1f}% win rate",
         f"  Short:        {perf['short_trades']} trades, {short_wr:.1f}% win rate",
+        "",
+        f"  WINDOW COMPARISON",
+        f"    4-6 PM:     {w46_t} trades, {w46_wr:.1f}% win rate, "
+        f"avg {w46_avg:+.2%}, total {w46_pnl:+.2%}",
+        f"    6-8 PM:     {w68_t} trades, {w68_wr:.1f}% win rate, "
+        f"avg {w68_avg:+.2%}, total {w68_pnl:+.2%}",
         "",
         f"  Net P&L:      {perf['total_net_pnl_pct']:+.2%} "
         f"(${perf['total_net_pnl_dollars']:+,.2f})",

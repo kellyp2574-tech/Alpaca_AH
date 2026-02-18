@@ -16,12 +16,14 @@ ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
 
 # ═══════════════════════════════════════════════════
 # Schedule (all times Eastern)
-#   Bot starts:  3:55 PM  (Task Scheduler)
-#   Anchor:      4:00 PM  (store official close)
-#   Monitor:     4:05–6:00 PM  (watch for ±7% moves)
-#   Entry:       ~6:00 PM (place fade trades)
-#   Manage:      6:00 PM–9:30 AM (overnight hold, stop/TP mgmt)
-#   Exit window: 9:30–9:40 AM next trading day
+#   Bot starts:       3:55 PM  (Task Scheduler)
+#   Anchor:           4:00 PM  (store official close)
+#   Monitor & Entry:  4:05–7:59 PM  (detect ±7% moves, enter immediately)
+#     "4-6" window:   4:05–5:59 PM  (highest AH liquidity, tighter spreads)
+#     "6-8" window:   6:00–7:59 PM  (declining liquidity, wider spreads)
+#   No new entries:   8:00 PM onward
+#   Manage:           8:00 PM–9:30 AM (overnight hold, stop/TP mgmt)
+#   Exit window:      9:30–9:40 AM next trading day
 # ═══════════════════════════════════════════════════
 BOT_START_HOUR = 15
 BOT_START_MINUTE = 55
@@ -29,20 +31,20 @@ BOT_START_MINUTE = 55
 ANCHOR_HOUR = 16              # 4:00 PM — store official close
 ANCHOR_MINUTE = 0
 
-MONITOR_START_HOUR = 16       # 4:05 PM — begin monitoring moves
+MONITOR_START_HOUR = 16       # 4:05 PM — begin monitoring + entries
 MONITOR_START_MINUTE = 5
 
-ENTRY_HOUR = 18               # 6:00 PM — place trades
-ENTRY_MINUTE = 0
-
-ENTRY_CUTOFF_HOUR = 18        # 6:00 PM — no new entries after this
+ENTRY_CUTOFF_HOUR = 20        # 8:00 PM — no new entries after this
 ENTRY_CUTOFF_MINUTE = 0
+
+# Window boundary for analytics: 4-6 vs 6-8
+LATE_WINDOW_HOUR = 18         # 6:00 PM — boundary between "4-6" and "6-8" windows
 
 EXIT_HOUR = 9                 # 9:30 AM next day — exit window
 EXIT_MINUTE = 30
 EXIT_WINDOW_MINUTES = 10      # 9:30–9:40 AM
 
-MONITOR_INTERVAL_SEC = 60     # check every 60s during 4:05–6:00 PM
+MONITOR_INTERVAL_SEC = 60     # check every 60s during 4:05–7:59 PM
 OVERNIGHT_INTERVAL_SEC = 300  # check every 5 min overnight (manage only)
 
 # ═══════════════════════════════════════════════════

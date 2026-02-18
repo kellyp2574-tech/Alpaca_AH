@@ -4,11 +4,12 @@ AH Bot Main Orchestrator — After-Hours Extreme Move Fade System.
 Launched daily at 3:55 PM ET by Windows Task Scheduler.
 
 PHASES:
-  1. ANCHOR   (4:00 PM)        — Store official close for every watchlist symbol
-  2. MONITOR  (4:05–6:00 PM)   — Track AH moves, identify ≥ ±7% extremes
-  3. ENTRY    (~6:00 PM)       — Place fade trades for qualifying symbols
-  4. MANAGE   (6:00 PM–9:30 AM)— Overnight hold, hard stop / profit ceiling
-  5. EXIT     (9:30–9:40 AM)   — Close all AH positions at market open
+  1. ANCHOR          (4:00 PM)         — Store official close for every watchlist symbol
+  2. MONITOR & ENTER (4:05–7:59 PM)    — Scan for ≥ ±7% moves, enter immediately
+       "4-6" window  (4:05–5:59 PM)    — Highest AH liquidity, tighter spreads
+       "6-8" window  (6:00–7:59 PM)    — Declining liquidity, wider spreads
+  3. MANAGE          (8:00 PM–9:30 AM) — Overnight hold, hard stop / profit ceiling
+  4. EXIT            (9:30–9:40 AM)    — Close all AH positions at market open
 
 Usage:
     python -m bot.main              # Normal session (3:55 PM -> 9:40 AM)
@@ -67,7 +68,7 @@ def time_reached(hour, minute):
 
 
 def is_past_entry_cutoff():
-    """True if past 6:00 PM (no new entries allowed)."""
+    """True if past 8:00 PM (no new entries allowed)."""
     return time_reached(config.ENTRY_CUTOFF_HOUR, config.ENTRY_CUTOFF_MINUTE)
 
 
@@ -183,14 +184,31 @@ def phase_anchor(state):
 
 
 # ═══════════════════════════════════════════════════
-# PHASE 2: MONITOR — Track moves 4:05–6:00 PM
+# PHASE 2: MONITOR & ENTER — 4:05–7:59 PM
+#   Continuously scan for ±7% moves and enter immediately.
+#   Tracks trigger_window ("4-6" or "6-8") per trade.
 # ═══════════════════════════════════════════════════
 
-def phase_monitor(state):
-    """Monitor AH price moves from 4:05 to 6:00 PM.
-    Logs extreme moves as they develop. Actual entries happen at 6:00 PM."""
+def _get_trigger_window():
+    """Return '4-6' or '6-8' based on current time."""
+    return "4-6" if now().hour < config.LATE_WINDOW_HOUR else "6-8"
+
+
+def phase_monitor_and_enter(state, dry_run=False):
+    """Continuous monitor + immediate entry from 4:05 PM to 8:00 PM.
+
+    Every 60 seconds:
+      1. Scan all watchlist symbols for ±7% moves from 4 PM anchor
+      2. If an extreme move is found AND we have open slots → enter immediately
+      3. Log trigger_window ('4-6' or '6-8') for later analytics
+
+    Microstructure difference:
+      4–6 PM: Highest AH liquidity, tighter spreads, fast earnings reaction
+      6–8 PM: Declining liquidity, wider spreads, slower drift
+    """
     logger.info("═" * 60)
-    logger.info("PHASE 2: MONITOR — watching for extreme moves (4:05–6:00 PM)")
+    logger.info("PHASE 2: MONITOR & ENTER — scanning for extreme moves (4:05–7:59 PM)"
+                + (" [DRY RUN]" if dry_run else ""))
 
     sleep_until(config.MONITOR_START_HOUR, config.MONITOR_START_MINUTE)
 
@@ -199,9 +217,32 @@ def phase_monitor(state):
         logger.error("No anchor closes stored — cannot monitor. Aborting.")
         return
 
-    extreme_candidates = {}  # symbol -> latest move info
+    positions = state.get("positions", {})
+    friday = is_friday()
 
-    while not time_reached(config.ENTRY_HOUR, config.ENTRY_MINUTE):
+    # Fetch account info once; update available_cash as entries are placed
+    try:
+        equity = broker.get_equity()
+        available_cash = broker.get_cash()
+    except Exception as e:
+        logger.error(f"Could not fetch account data: {e}")
+        return
+
+    # Track which symbols we've already seen as extreme (avoid repeated log spam)
+    seen_extreme = set()
+    scan_count = 0
+
+    while not is_past_entry_cutoff():
+        scan_count += 1
+        active_count = len(positions)
+        slots_remaining = config.MAX_CONCURRENT_POSITIONS - active_count
+        window = _get_trigger_window()
+
+        if scan_count % 10 == 1:  # Log status every ~10 minutes
+            logger.info(f"── Scan {scan_count} [{window} window] "
+                        f"@ {now().strftime('%I:%M:%S %p')} "
+                        f"| {active_count} positions, {slots_remaining} slots ──")
+
         try:
             symbols_to_check = list(anchor_closes.keys())
             prices = data.fetch_live_prices(symbols_to_check)
@@ -210,158 +251,103 @@ def phase_monitor(state):
                 price = prices.get(symbol)
                 if not price:
                     continue
+
+                # Already holding this symbol
+                if symbol in positions:
+                    continue
+
                 anchor = anchor_closes[symbol]
                 move_pct = (price - anchor) / anchor
 
-                if abs(move_pct) >= config.EXTREME_MOVE_PCT:
-                    if symbol not in extreme_candidates:
-                        logger.info(f"*** EXTREME MOVE: {symbol} {move_pct:+.2%} "
-                                    f"(${anchor:.2f} -> ${price:.2f})")
-                    extreme_candidates[symbol] = {
-                        "move_pct": move_pct,
-                        "current_price": price,
-                        "anchor_close": anchor,
-                    }
-                elif symbol in extreme_candidates:
-                    # Moved back inside threshold
-                    logger.info(f"  {symbol} reverted to {move_pct:+.2%} — removing from candidates")
-                    del extreme_candidates[symbol]
+                # Not an extreme move
+                if abs(move_pct) < config.EXTREME_MOVE_PCT:
+                    if symbol in seen_extreme:
+                        logger.info(f"  {symbol} reverted to {move_pct:+.2%} — no longer extreme")
+                        seen_extreme.discard(symbol)
+                    continue
+
+                # Log first detection
+                if symbol not in seen_extreme:
+                    logger.info(f"*** EXTREME MOVE [{window}]: {symbol} {move_pct:+.2%} "
+                                f"(${anchor:.2f} -> ${price:.2f})")
+                    seen_extreme.add(symbol)
+
+                # No slots available — just log and continue monitoring
+                if slots_remaining <= 0:
+                    continue
+
+                # ── Attempt entry ──
+                should_enter, direction, reason = strategies.evaluate_entry_signal(
+                    symbol, anchor, price, friday, active_count
+                )
+
+                if not should_enter:
+                    logger.debug(f"SKIP {symbol}: {reason}")
+                    continue
+
+                qty = strategies.compute_position_size(
+                    equity, price, direction, available_cash, slots_remaining
+                )
+                if qty <= 0:
+                    logger.info(f"SKIP {symbol}: computed qty=0 "
+                                f"(equity=${equity:,.2f} cash=${available_cash:,.2f})")
+                    continue
+
+                notional = qty * price
+                logger.info(f"ENTRY [{window}]: {direction.upper()} {symbol} "
+                            f"qty={qty} @ ${price:.2f} (~${notional:,.0f}) — {reason}")
+
+                if not dry_run:
+                    if direction == "long":
+                        order = broker.buy_limit_extended(symbol, qty, price)
+                    else:
+                        order = broker.sell_short_limit_extended(symbol, qty, price)
+
+                    if order:
+                        positions[symbol] = {
+                            "direction": direction,
+                            "entry_price": price,
+                            "qty": qty,
+                            "entry_time": now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "trigger_window": window,
+                            "entry_spread_pct": 0,  # TODO: fetch bid-ask if available
+                            "anchor_close": anchor,
+                            "max_favorable_pnl": 0.0,
+                            "max_adverse_pnl": 0.0,
+                        }
+                        log_trade(state, "ENTRY", symbol, qty, price,
+                                  f"[{window}] {reason}", direction)
+                        active_count += 1
+                        slots_remaining -= 1
+                        if direction == "long":
+                            available_cash -= notional
+                            available_cash = max(available_cash, 0)
+                else:
+                    logger.info(f"  [DRY RUN] Would {direction} {qty} shares "
+                                f"of {symbol} @ ${price:.2f}")
+                    active_count += 1
+                    slots_remaining -= 1
+                    if direction == "long":
+                        available_cash -= notional
+                        available_cash = max(available_cash, 0)
 
         except Exception as e:
-            logger.error(f"Monitor error: {e}", exc_info=True)
+            logger.error(f"Monitor/entry error: {e}", exc_info=True)
 
+        state["positions"] = positions
+        save_state(state)
         time.sleep(config.MONITOR_INTERVAL_SEC)
 
-    # Store candidates for entry phase
-    state["_extreme_candidates"] = extreme_candidates
-    logger.info(f"Monitor complete — {len(extreme_candidates)} extreme candidates")
-    for sym, info in extreme_candidates.items():
-        logger.info(f"  {sym}: {info['move_pct']:+.2%} @ ${info['current_price']:.2f}")
-
-    save_state(state)
-
-
-# ═══════════════════════════════════════════════════
-# PHASE 3: ENTRY — Place fade trades at ~6:00 PM
-# ═══════════════════════════════════════════════════
-
-def phase_entry(state, dry_run=False):
-    """At 6:00 PM: evaluate candidates and place fade orders.
-    - No duplicate positions (skip symbols we already hold)
-    - Longs: sized by splitting available cash across remaining slots
-    - Shorts: sized by risk only (margin-backed)
-    - Max 3 concurrent positions total"""
-    logger.info("═" * 60)
-    logger.info("PHASE 3: ENTRY — placing fade trades" + (" [DRY RUN]" if dry_run else ""))
-
-    anchor_closes = state.get("anchor_closes", {})
-    candidates = state.get("_extreme_candidates", {})
-    positions = state.get("positions", {})
-
-    if not candidates:
-        logger.info("No extreme move candidates — nothing to enter")
-        return
-
-    # Fresh prices + spread data for entry
-    candidate_symbols = list(candidates.keys())
-    snapshots = data.fetch_snapshots(candidate_symbols)
-    prices = {sym: snap.get("price") for sym, snap in snapshots.items() if snap.get("price")}
-
-    try:
-        equity = broker.get_equity()
-        available_cash = broker.get_cash()  # non-margin buying power
-    except Exception as e:
-        logger.error(f"Could not fetch account data: {e}")
-        return
-
-    friday = is_friday()
-    active_count = len(positions)
-    slots_remaining = config.MAX_CONCURRENT_POSITIONS - active_count
-
-    logger.info(f"Account: equity=${equity:,.2f} cash=${available_cash:,.2f} "
-                f"slots={slots_remaining}/{config.MAX_CONCURRENT_POSITIONS}")
-
-    for symbol in candidate_symbols:
-        # No duplicate positions
-        if symbol in positions:
-            logger.info(f"SKIP {symbol}: already holding a position")
-            continue
-
-        # No more slots
-        if slots_remaining <= 0:
-            logger.info(f"SKIP {symbol}: all {config.MAX_CONCURRENT_POSITIONS} slots filled")
-            continue
-
-        price = prices.get(symbol)
-        if not price:
-            logger.warning(f"No price for {symbol} at entry time — skipping")
-            continue
-
-        anchor = anchor_closes.get(symbol, 0)
-        should_enter, direction, reason = strategies.evaluate_entry_signal(
-            symbol, anchor, price, friday, active_count
-        )
-
-        if not should_enter:
-            logger.info(f"SKIP {symbol}: {reason}")
-            continue
-
-        qty = strategies.compute_position_size(
-            equity, price, direction, available_cash, slots_remaining
-        )
-        if qty <= 0:
-            logger.info(f"SKIP {symbol}: computed qty=0 "
-                        f"(equity=${equity:,.2f} cash=${available_cash:,.2f})")
-            continue
-
-        notional = qty * price
-        logger.info(f"ENTRY: {direction.upper()} {symbol} qty={qty} @ ${price:.2f} "
-                     f"(~${notional:,.0f}) — {reason}")
-
-        if not dry_run:
-            if direction == "long":
-                order = broker.buy_limit_extended(symbol, qty, price)
-            else:
-                order = broker.sell_short_limit_extended(symbol, qty, price)
-
-            if order:
-                entry_snap = snapshots.get(symbol, {})
-                positions[symbol] = {
-                    "direction": direction,
-                    "entry_price": price,
-                    "qty": qty,
-                    "entry_time": now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "entry_spread_pct": entry_snap.get("spread_pct") or 0,
-                    "anchor_close": anchor,
-                    "max_favorable_pnl": 0.0,
-                    "max_adverse_pnl": 0.0,
-                }
-                log_trade(state, "ENTRY", symbol, qty, price, reason, direction)
-                active_count += 1
-                slots_remaining -= 1
-                # Deduct cash for longs so next position sizes correctly
-                if direction == "long":
-                    available_cash -= notional
-                    available_cash = max(available_cash, 0)
-        else:
-            logger.info(f"  [DRY RUN] Would {direction} {qty} shares of {symbol} @ ${price:.2f}")
-            # Track slots in dry run too
-            active_count += 1
-            slots_remaining -= 1
-            if direction == "long":
-                available_cash -= notional
-                available_cash = max(available_cash, 0)
-
-    state["positions"] = positions
-    # Clean up temp candidates
-    state.pop("_extreme_candidates", None)
-    save_state(state)
-
-    logger.info(f"Entry phase complete — {len(positions)} active positions")
+    # Final summary
+    logger.info(f"Monitor & entry window closed (8:00 PM) — "
+                f"{len(positions)} active positions")
+    for sym, pos in positions.items():
+        logger.info(f"  {sym}: {pos['direction']} [{pos.get('trigger_window', '?')}] "
+                    f"@ ${pos['entry_price']:.2f}")
 
 
 # ═══════════════════════════════════════════════════
-# PHASE 4: MANAGE — Overnight hold (6:00 PM–9:30 AM)
+# PHASE 3: MANAGE — Overnight hold (8:00 PM–9:30 AM)
 # ═══════════════════════════════════════════════════
 
 def run_manage_cycle(state, dry_run=False):
@@ -418,6 +404,8 @@ def run_manage_cycle(state, dry_run=False):
                     max_adverse=pos.get("max_adverse_pnl"),
                 )
                 metrics["symbol"] = symbol
+                metrics["qty"] = pos["qty"]
+                metrics["trigger_window"] = pos.get("trigger_window", "unknown")
                 metrics["exit_reason"] = reason
                 save_trade_metrics(metrics)
 
@@ -432,10 +420,10 @@ def run_manage_cycle(state, dry_run=False):
 
 
 def phase_manage(state, dry_run=False):
-    """Overnight management loop: 6:00 PM to 9:30 AM.
+    """Overnight management loop: 8:00 PM to 9:30 AM.
     On Friday sessions, sleeps through the weekend until Monday morning."""
     logger.info("═" * 60)
-    logger.info("PHASE 4: MANAGE — overnight hold" + (" [DRY RUN]" if dry_run else ""))
+    logger.info("PHASE 3: MANAGE — overnight hold" + (" [DRY RUN]" if dry_run else ""))
 
     positions = state.get("positions", {})
 
@@ -479,13 +467,13 @@ def phase_manage(state, dry_run=False):
 
 
 # ═══════════════════════════════════════════════════
-# PHASE 5: EXIT — Close all at 9:30–9:40 AM
+# PHASE 4: EXIT — Close all at 9:30–9:40 AM
 # ═══════════════════════════════════════════════════
 
 def phase_exit(state, dry_run=False):
     """Morning exit: close all AH positions at market open."""
     logger.info("═" * 60)
-    logger.info("PHASE 5: EXIT — morning close-out" + (" [DRY RUN]" if dry_run else ""))
+    logger.info("PHASE 4: EXIT — morning close-out" + (" [DRY RUN]" if dry_run else ""))
 
     positions = state.get("positions", {})
     if not positions:
@@ -527,6 +515,8 @@ def phase_exit(state, dry_run=False):
                 max_adverse=pos.get("max_adverse_pnl"),
             )
             metrics["symbol"] = symbol
+            metrics["qty"] = pos["qty"]
+            metrics["trigger_window"] = pos.get("trigger_window", "unknown")
             metrics["exit_reason"] = "morning_closeout"
             save_trade_metrics(metrics)
 
@@ -671,16 +661,13 @@ def run_session(dry_run=False):
         # Phase 1: Anchor at 4:00 PM
         phase_anchor(state)
 
-        # Phase 2: Monitor 4:05–6:00 PM
-        phase_monitor(state)
+        # Phase 2: Monitor & Enter 4:05–7:59 PM (immediate entry on ±7% moves)
+        phase_monitor_and_enter(state, dry_run=dry_run)
 
-        # Phase 3: Entry at ~6:00 PM
-        phase_entry(state, dry_run=dry_run)
-
-        # Phase 4: Manage overnight
+        # Phase 3: Manage overnight 8:00 PM–9:30 AM
         phase_manage(state, dry_run=dry_run)
 
-        # Phase 5: Exit at 9:30 AM
+        # Phase 4: Exit at 9:30 AM
         phase_exit(state, dry_run=dry_run)
 
     except KeyboardInterrupt:
